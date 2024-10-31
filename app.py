@@ -11,10 +11,14 @@ def load_quickbooks_data(file_path):
     pnl_df = pd.read_excel(file_path, sheet_name="Profit & Loss Statement")
     return expense_df, cash_flow_df, balance_sheet_df, pnl_df
 
-def select_primary_cost(expense_df):
-    expense_summary = expense_df.groupby("Expense_Category")["Amount"].sum().sort_values(ascending=False)
-    primary_cost_category = expense_summary.idxmax()
-    primary_cost = expense_summary.max()
+def select_primary_cost(expense_df, manual_category=None):
+    if manual_category:
+        primary_cost_category = manual_category
+        primary_cost = expense_df[expense_df["Expense_Category"] == manual_category]["Amount"].sum()
+    else:
+        expense_summary = expense_df.groupby("Expense_Category")["Amount"].sum().sort_values(ascending=False)
+        primary_cost_category = expense_summary.idxmax()
+        primary_cost = expense_summary.max()
     return primary_cost_category, primary_cost
 
 def map_expense_to_commodity(expense_category):
@@ -130,18 +134,28 @@ quickbooks_file = st.sidebar.file_uploader("Upload QuickBooks Data (Excel)", typ
 commodity_file = st.sidebar.file_uploader("Upload Commodity Options Data (Excel)", type=["xlsx"])
 
 if quickbooks_file and commodity_file:
-    # Load data and analyze
+    # Load data
     expense_df, cash_flow_df, balance_sheet_df, pnl_df = load_quickbooks_data(quickbooks_file)
-    primary_cost_category, primary_cost = select_primary_cost(expense_df)
+
+    # Option to auto-select or manually choose primary cost category
+    st.sidebar.subheader("Primary Cost Category Selection")
+    category_option = st.sidebar.selectbox("Choose primary cost selection method:", ["Auto-select", "Manual"])
+
+    manual_category = None
+    if category_option == "Manual":
+        available_categories = expense_df["Expense_Category"].unique()
+        manual_category = st.sidebar.selectbox("Select a primary cost category:", available_categories)
+
+    # Run analysis
+    primary_cost_category, primary_cost = select_primary_cost(expense_df, manual_category)
     mapped_commodity = map_expense_to_commodity(primary_cost_category)
-    
     commodity_df = load_commodity_data(commodity_file)
     volatility, high_season = calculate_volatility_and_seasonality(commodity_df[commodity_df["Commodity"] == mapped_commodity])
     financial_profile = assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df)
     hedge_duration = recommend_hedge_duration(volatility, financial_profile, expense_df)
     best_contract, contracts = recommend_contracts_and_select_best(commodity_df, mapped_commodity, hedge_duration, financial_profile)
 
-    # Display results in a nice format
+    # Display results
     st.header("Analysis Results")
     st.subheader("Primary Information")
     st.write(f"**Primary Cost Category**: {primary_cost_category}")
@@ -164,18 +178,21 @@ if quickbooks_file and commodity_file:
 
         fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-        # Historical Return vs Volatility
-        axs[0].bar(contract_durations, historical_returns, color='blue', label='Return')
-        axs[0].plot(contract_durations, historical_volatility, color='red', marker='o', label='Volatility')
+                # Historical Return vs Volatility
+        axs[0].bar(contract_durations, historical_returns, color='blue', label='Historical Return (%)')
+        axs[0].plot(contract_durations, historical_volatility, color='red', marker='o', label='Historical Volatility (%)')
         axs[0].set_title("Historical Return and Volatility by Duration")
+        axs[0].set_xlabel("Contract Duration (months)")
+        axs[0].set_ylabel("Percentage (%)")
         axs[0].legend()
 
         # Expected Future Return vs Volatility
-        axs[1].bar(contract_durations, expected_returns, color='blue', label='Expected Return')
-        axs[1].plot(contract_durations, expected_volatility, color='red', marker='o', label='Expected Volatility')
+        axs[1].bar(contract_durations, expected_returns, color='blue', label='Expected Future Return (%)')
+        axs[1].plot(contract_durations, expected_volatility, color='red', marker='o', label='Expected Future Volatility (%)')
         axs[1].set_title("Expected Future Return and Volatility by Duration")
-        axs[1].legend()
         axs[1].set_xlabel("Contract Duration (months)")
+        axs[1].set_ylabel("Percentage (%)")
+        axs[1].legend()
 
         # Display the charts in Streamlit
         st.pyplot(fig)
