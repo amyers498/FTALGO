@@ -170,7 +170,7 @@ if quickbooks_file and commodity_file:
             st.write(f"### Recommendation {idx}")
             st.write(f"**Commodity:** {rec['Commodity']}")
             st.write(f"**Expense Category:** {rec['Category']}")
-            s            st.write(f"**Correlation with Expense:** {rec['Correlation']}")
+            st.write(f"**Correlation with Expense:** {rec['Correlation']}")
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
