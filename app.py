@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Define functions for analysis
 def load_quickbooks_data(file_path):
@@ -117,9 +118,9 @@ def recommend_contracts_and_select_best(commodity_df, primary_commodity, hedge_d
     if contracts:
         best_contract = (min(contracts, key=lambda x: x["Historical Volatility (%)"]) if financial_profile["risk_tolerance"] == "High"
                          else max(contracts, key=lambda x: x["Expected Future Return (%)"] / (x["Expected Future Volatility (%)"] + 1)))
-        return best_contract
+        return best_contract, contracts
     else:
-        return None
+        return None, None
 
 # Streamlit UI
 st.title("Hedging Strategy Dashboard")
@@ -138,16 +139,48 @@ if quickbooks_file and commodity_file:
     volatility, high_season = calculate_volatility_and_seasonality(commodity_df[commodity_df["Commodity"] == mapped_commodity])
     financial_profile = assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df)
     hedge_duration = recommend_hedge_duration(volatility, financial_profile, expense_df)
-    best_contract = recommend_contracts_and_select_best(commodity_df, mapped_commodity, hedge_duration, financial_profile)
+    best_contract, contracts = recommend_contracts_and_select_best(commodity_df, mapped_commodity, hedge_duration, financial_profile)
 
-    # Display results
+    # Display results in a nice format
     st.header("Analysis Results")
-    st.write("**Primary Cost Category**:", primary_cost_category)
-    st.write("**Mapped Commodity**:", mapped_commodity)
-    st.write("**Financial Profile**:", financial_profile)
-    st.write("**Commodity Volatility (%)**:", round(volatility, 2))
-    st.write("**High Season**:", high_season)
-    st.write("**Recommended Hedge Duration**:", hedge_duration)
-    st.write("**Best Contract**:", best_contract)
+    st.subheader("Primary Information")
+    st.write(f"**Primary Cost Category**: {primary_cost_category}")
+    st.write(f"**Mapped Commodity**: {mapped_commodity}")
+    st.write(f"**Financial Profile**: {financial_profile}")
+    st.write(f"**Commodity Volatility (%)**: {round(volatility, 2)}")
+    st.write(f"**High Season**: {high_season}")
+    st.write(f"**Recommended Hedge Duration**: {hedge_duration}")
+
+    if best_contract:
+        st.subheader("Best Contract Recommendation")
+        st.write(best_contract)
+
+        # Plot historical and expected returns and volatility for visual analysis
+        contract_durations = [c["Duration (months)"] for c in contracts]
+        historical_returns = [c["Historical Average Return (%)"] for c in contracts]
+        historical_volatility = [c["Historical Volatility (%)"] for c in contracts]
+        expected_returns = [c["Expected Future Return (%)"] for c in contracts]
+        expected_volatility = [c["Expected Future Volatility (%)"] for c in contracts]
+
+        fig, axs = plt.subplots(2, 1, figsize=(10, 8))
+
+        # Historical Return vs Volatility
+        axs[0].bar(contract_durations, historical_returns, color='blue', label='Return')
+        axs[0].plot(contract_durations, historical_volatility, color='red', marker='o', label='Volatility')
+        axs[0].set_title("Historical Return and Volatility by Duration")
+        axs[0].legend()
+
+        # Expected Future Return vs Volatility
+        axs[1].bar(contract_durations, expected_returns, color='blue', label='Expected Return')
+        axs[1].plot(contract_durations, expected_volatility, color='red', marker='o', label='Expected Volatility')
+        axs[1].set_title("Expected Future Return and Volatility by Duration")
+        axs[1].legend()
+        axs[1].set_xlabel("Contract Duration (months)")
+
+        # Display the charts in Streamlit
+        st.pyplot(fig)
+
+    else:
+        st.write("No viable contracts were found based on the given data.")
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
