@@ -175,7 +175,7 @@ if quickbooks_file and commodity_file:
 
             # Plot Monthly Returns
             fig, ax = plt.subplots(figsize=(10, 6))
-            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns']), marker="o", ax=ax
+            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
             ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
             ax.set_xlabel("Month")
             ax.set_ylabel("Expected Return (%)")
