@@ -26,31 +26,37 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate multiple expenses with commodities, dynamically relaxing correlation requirements if needed
-def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.5, correlation_step=0.1):
-    current_correlation_threshold = min_correlation
-    found_hedges = []
+# Correlate expenses with commodities and adjust threshold until a match is found
+def correlate_expenses_with_commodities(expense_df, commodity_df, min_threshold=0.9, max_attempts=5):
+    threshold = min_threshold
+    best_correlations = []
 
-    while not found_hedges and current_correlation_threshold >= 0:
+    # Loop to progressively loosen correlation threshold
+    for attempt in range(max_attempts):
         expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
         correlations = {}
 
         for commodity in commodity_df["Commodity"].unique():
             commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
             commodity_prices = commodity_prices.resample("M").mean()
-            
+
             for category in expense_monthly_totals.columns:
                 combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
                 correlation = combined["Expense"].corr(combined["Commodity"])
-
-                if abs(correlation) >= current_correlation_threshold:
+                if abs(correlation) >= threshold:  # Check if correlation meets threshold
                     correlations[(commodity, category)] = correlation
 
+        # Sort correlations and check for matches
         best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-        found_hedges = best_correlations[:3]  # Take top 3 if they exist
-        current_correlation_threshold -= correlation_step  # Decrease threshold if no viable options found
+        if best_correlations:
+            break  # Stop loosening threshold if matches are found
+        else:
+            threshold -= 0.1  # Loosen threshold by 0.1 each attempt
 
-    return found_hedges
+    if not best_correlations:
+        # If no matches, select top results based on highest returns
+        best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+    return best_correlations[:3]
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -66,14 +72,14 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend contracts based on best expense-commodity correlations
+# Recommend hedges based on best correlations or highest returns if correlation is not met
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-        duration = 12  # Example duration, could be adjusted
+        duration = 12  # Set duration (e.g., 12 months)
 
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
@@ -90,7 +96,7 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
             "Monthly Returns": monthly_returns.tolist()
         })
 
-    return recommendations
+    return recommendations if recommendations else [{"Info": "No high correlation match found; top results by return displayed."}]
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -153,6 +159,9 @@ if quickbooks_file and commodity_file:
             sns.set_theme(style="whitegrid")
 
             for idx, rec in enumerate(best_recommendations, start=1):
+                if "Info" in rec:
+                    st.write(rec["Info"])
+                    continue
                 st.write(f"### Recommendation {idx}")
                 st.write(f"**Commodity:** {rec['Commodity']}")
                 st.write(f"**Expense Category:** {rec['Category']}")
@@ -178,9 +187,8 @@ if quickbooks_file and commodity_file:
                 st.pyplot(fig)
 
         else:
-            st.write("No viable contracts were found based on the given data, even after progressively loosening the correlation threshold. Please consider reviewing the input data or adjusting your criteria.")
+            st.write("No viable contracts were found, even after loosening correlation thresholds and considering high-return options. Please consider reviewing the input data or adjusting criteria further.")
 
 else:
-    # Prompt user to upload both necessary files
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
