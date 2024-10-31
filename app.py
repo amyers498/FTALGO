@@ -29,7 +29,7 @@ def load_commodity_data(file):
 # Correlate all expenses with all commodities
 def correlate_expenses_with_commodities(expense_df, commodity_df):
     # Calculate monthly totals for expenses
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
+    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack()
     expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
 
     correlations = {}
@@ -39,27 +39,25 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
 
         for category in expense_monthly_totals.columns:
-            # Combine and align data without filling missing values with 0
-            combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices})
+            # Combine data without filling missing values with 0
+            combined = pd.DataFrame({"Expense": expense_monthly_totals[category].astype(float), "Commodity": commodity_prices.astype(float)})
             combined.dropna(inplace=True)  # Drop rows with NaN values to ensure proper correlation calculation
             
-            # Debugging prints to verify data alignment and content before correlation
-            print(f"Combined data for {commodity} and {category}:")
-            print(combined.head())
+            # Streamlit debugging to verify data alignment and content before correlation
+            st.write(f"Combined data for {commodity} and {category}:", combined.head())
 
             # Calculate and store correlation
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
-            print(f"Correlation between {commodity} and {category}: {correlation}")  # Debug correlation output
+            st.write(f"Correlation between {commodity} and {category}: {correlation}")  # Debug correlation output
 
     # Sort and return the correlations
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
     return best_correlations
 
-
 # Correlate a specific expense category with all commodities
 def correlate_specific_category(expense_df, commodity_df, category):
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
+    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack()
     expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
     
     correlations = {}
@@ -73,7 +71,7 @@ def correlate_specific_category(expense_df, commodity_df, category):
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
         
         # Combine and align data without filling missing values with 0
-        combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices})
+        combined = pd.DataFrame({"Expense": expense_monthly_totals[category].astype(float), "Commodity": commodity_prices.astype(float)})
         combined.dropna(inplace=True)  # Drop rows with NaN values
 
         # Calculate correlation
@@ -83,40 +81,6 @@ def correlate_specific_category(expense_df, commodity_df, category):
     # Sort and return top correlations
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
     return best_correlations[:3]
-
-
-
-
-
-# Correlate a specific expense category with all commodities
-def correlate_specific_category(expense_df, commodity_df, category):
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
-    expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
-    
-    correlations = {}
-
-    if category not in expense_monthly_totals.columns:
-        st.warning(f"No data found for the selected category: {category}")
-        return []
-
-    for commodity in commodity_df["Commodity"].unique():
-        # Resample and align commodity prices
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
-        
-        # Combine and align expense with commodity data
-        combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
-        combined = combined.reindex(expense_monthly_totals.index, fill_value=0)  # Reindex to fill missing months
-
-        # Calculate correlation
-        correlation = combined["Expense"].corr(combined["Commodity"])
-        correlations[(commodity, category)] = correlation
-
-    # Sort and return top correlations
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations[:3]
-
-
-
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -160,6 +124,8 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     if not recommendations:
         st.write("No positive savings recommendations found.")
     return recommendations[:3]
+
+# Streamlit Setup (the rest of the setup remains unchanged)
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
