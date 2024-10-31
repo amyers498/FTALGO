@@ -27,26 +27,40 @@ def load_commodity_data(file):
         st.stop()
 
 # Correlate all expenses with all commodities
-# Correlate all expenses with all commodities
 def correlate_expenses_with_commodities(expense_df, commodity_df):
+    # Calculate monthly totals for expenses
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
+
     correlations = {}
 
     for commodity in commodity_df["Commodity"].unique():
+        # Resample commodity prices to monthly averages
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
 
-        for category in expense_monthly_totals.columns:
-            combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices})
-            combined.dropna(inplace=True)  # Ensure no NaNs remain
+        # Print for debugging
+        print(f"Debugging {commodity}: Commodity Prices (monthly) -")
+        print(commodity_prices.head())
 
+        # Align both DataFrames by reindexing to ensure matching periods
+        for category in expense_monthly_totals.columns:
+            combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
+            combined = combined.reindex(expense_monthly_totals.index, fill_value=0)  # Fill missing months with 0 if needed
+            
+            # Debugging print to verify alignment
+            print(f"\nDebugging Combined Data for {commodity} and {category}:")
+            print(combined.head())
+            print(f"Expense data sample: {expense_monthly_totals[category].head()}")
+            print(f"Commodity data sample: {commodity_prices.head()}")
+
+            # Calculate and store correlation
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
-            print(f"Debug: Correlation between {commodity} and {category}: {correlation}")  # Debug print for correlation values
+            print(f"Correlation between {commodity} and {category}: {correlation}")  # Debug correlation output
 
+    # Sort and return the correlations
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
     return best_correlations
-
 
 
 # Correlate a specific expense category with all commodities
