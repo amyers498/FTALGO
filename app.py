@@ -174,7 +174,7 @@ if quickbooks_file and commodity_file:
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
-            st.write(f"**Explanation:** {rec['Explanation']}")
+            st.write(f"**Explanations:** {rec['Explanation']}")
 
             # Check for Monthly Returns data before plotting
             if rec['Monthly Returns']:
