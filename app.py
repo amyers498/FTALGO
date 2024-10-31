@@ -26,6 +26,18 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
+# Determine hedge contract duration based on expense volatility
+def determine_contract_duration(expense_df, category):
+    monthly_expenses = expense_df[expense_df["Expense_Category"] == category].groupby(expense_df["Date"].dt.to_period("M"))["Amount"].sum()
+    volatility = monthly_expenses.std() / monthly_expenses.mean()
+    
+    if volatility > 0.2:
+        return 3  # Short-term for high volatility
+    elif 0.1 <= volatility <= 0.2:
+        return 6  # Medium-term for moderate volatility
+    else:
+        return 12  # Long-term for low volatility
+
 # Correlate all expenses with all commodities
 def correlate_expenses_with_commodities(expense_df, commodity_df):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
@@ -38,8 +50,7 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations  # Return sorted correlations for analysis
+    return sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
 
 # Correlate a specific expense category with all commodities
 def correlate_specific_category(expense_df, commodity_df, category):
@@ -56,8 +67,7 @@ def correlate_specific_category(expense_df, commodity_df, category):
         correlation = combined["Expense"].corr(combined["Commodity"])
         correlations[(commodity, category)] = correlation
 
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations[:3]  # Return top 3 correlations for the specific category
+    return sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -73,14 +83,16 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend contracts based on best correlations, ensuring positive savings
+# Recommend contracts based on best correlations, using expense-based contract length
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-        duration = 12
+
+        # Set contract duration based on volatility
+        duration = determine_contract_duration(expense_df, category)
 
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
@@ -94,12 +106,10 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
                 "Expected Monthly Return (%)": monthly_returns.mean(),
                 "Expected Volatility (%)": volatility.mean(),
                 "Potential Savings": round(estimated_savings, 2),
-                "Monthly Returns": monthly_returns.tolist(),
-                "Explanation": f"This hedge was selected for {category} due to a {round(correlation * 100, 1)}% correlation with {commodity}, offering stable returns and helping to control price fluctuations."
+                "Duration (Months)": duration,
+                "Explanation": f"This hedge was selected for {category} due to a {round(correlation * 100, 1)}% correlation with {commodity}. A {duration}-month contract was suggested based on expense volatility."
             })
 
-    if not recommendations:
-        st.write("No positive savings recommendations found.")
     return recommendations[:3]
 
 # Streamlit Setup
@@ -146,6 +156,7 @@ if quickbooks_file and commodity_file:
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
+            st.write(f"**Duration (Months):** {rec['Duration (Months)']}")
             st.write(f"**Explanation:** {rec['Explanation']}")
 
             # Plot Monthly Returns
@@ -157,8 +168,8 @@ if quickbooks_file and commodity_file:
             st.pyplot(fig)
 
     else:
-        # Auto-select the best correlations and recommend hedges
-        best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
+        # Auto-select the best correlations
+                best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
         best_recommendations = recommend_best_hedges(commodity_df, expense_df, best_correlations)
 
         # Display top recommendations
@@ -170,7 +181,8 @@ if quickbooks_file and commodity_file:
             st.write(f"**Correlation with Expense:** {rec['Correlation']}")
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
-            st            .write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
+            st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
+            st.write(f"**Duration (Months):** {rec['Duration (Months)']}")
             st.write(f"**Explanation:** {rec['Explanation']}")
 
             # Plot Monthly Returns
@@ -191,6 +203,7 @@ if quickbooks_file and commodity_file:
 
         if not best_recommendations:
             st.write("No viable contracts were found. Please review the data or adjust criteria.")
+
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
