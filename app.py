@@ -3,22 +3,19 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from statsmodels.tsa.arima.model import ARIMA
-from arch import arch_model
-import seaborn as sns
+from arch import arch_model  # Ensure 'arch' is installed for GARCH model
+import seaborn as sns 
 
 # Function to load financial data from QuickBooks
 def load_quickbooks_data(file_path):
+    # Load each sheet from QuickBooks Excel file into separate dataframes
     expense_df = pd.read_excel(file_path, sheet_name="Expense Report")
     cash_flow_df = pd.read_excel(file_path, sheet_name="Cash Flow Statement")
     balance_sheet_df = pd.read_excel(file_path, sheet_name="Balance Sheet")
     pnl_df = pd.read_excel(file_path, sheet_name="Profit & Loss Statement")
-    return expense_df, cash_flow_df, balance_sheet_df, pnl_df
+    return expense_df, cash_flow_df, balance_sheet_df, pnl_df  # Return all dataframes
 
-# Load commodity data
-def load_commodity_data(file_path):
-    return pd.read_excel(file_path)
-
-# Correlate each expense category with commodities and find the best match
+# Function to correlate each expense category with each commodity
 def correlate_expenses_with_commodities(expense_df, commodity_df):
     expense_categories = expense_df["Expense_Category"].unique()
     correlations = []
@@ -39,22 +36,24 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
                 "Correlation": correlation
             })
 
-    correlations = pd.DataFrame(correlations).sort_values(by="Correlation", ascending=False)
-    return correlations[correlations["Correlation"] > 0]
+    correlations_df = pd.DataFrame(correlations).sort_values(by="Correlation", ascending=False)
+    return correlations_df[correlations_df["Correlation"] > 0]  # Only positive correlations
 
-# Forecast returns and volatility with ARIMA and GARCH models
+# Improved function to predict returns and volatility using ARIMA and GARCH models
 def forecast_returns_and_volatility(commodity_data, duration):
+    # ARIMA model to predict return
     model_arima = ARIMA(commodity_data['Commodity_Price'], order=(1, 1, 1))
     arima_fit = model_arima.fit()
     arima_forecast = arima_fit.forecast(steps=duration)
     expected_future_return = arima_forecast.mean() / commodity_data['Commodity_Price'].iloc[-1] - 1
 
+    # GARCH model to predict volatility
     model_garch = arch_model(commodity_data['Daily_Return'].dropna(), vol='Garch', p=1, q=1)
     garch_fit = model_garch.fit(disp="off")
     garch_forecast = garch_fit.forecast(horizon=duration)
-    expected_future_volatility = np.sqrt(garch_forecast.variance.values[-1, :]).mean() * 100
+    expected_future_volatility = np.sqrt(garch_forecast.variance.values[-1, :]).mean() * 100  # Annualized volatility
 
-    return expected_future_return * 100, expected_future_volatility
+    return expected_future_return * 100, expected_future_volatility  # Return percentage values
 
 # Assess company's financial health and risk tolerance
 def assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df):
@@ -65,7 +64,7 @@ def assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df):
     avg_assets = balance_sheet_df["Current_Assets"].mean()
     avg_liabilities = balance_sheet_df["Current_Liabilities"].mean()
     current_ratio = avg_assets / avg_liabilities
-
+    
     avg_long_term_debt = balance_sheet_df["Long_Term_Debt"].mean()
     avg_equity = balance_sheet_df["Equity"].mean()
     debt_to_equity_ratio = (avg_liabilities + avg_long_term_debt) / avg_equity
@@ -84,7 +83,7 @@ def assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df):
         "risk_tolerance": risk_tolerance
     }
 
-# Select contract durations based on hedge requirements
+# Function to select contract durations based on hedge requirements
 def select_contract_durations(hedge_duration):
     return {
         "Short-Term (1-3 months)": [1, 2, 3],
@@ -92,7 +91,7 @@ def select_contract_durations(hedge_duration):
         "Long-Term (12+ months)": [12, 18, 24]
     }[hedge_duration]
 
-# Recommend contracts based on weighted correlations
+# Function to recommend contracts based on weighted correlations
 def recommend_contracts(commodity_df, correlations, hedge_duration, financial_profile):
     contracts = []
     selected_durations = select_contract_durations(hedge_duration)
@@ -124,9 +123,8 @@ def recommend_contracts(commodity_df, correlations, hedge_duration, financial_pr
                     "Weighted Return": weighted_return
                 })
 
-    contracts = pd.DataFrame(contracts)
-    contracts = contracts.sort_values(by=["Weighted Return", "Expected Future Volatility (%)"], ascending=[False, True])
-    return contracts.head(3)
+    contracts_df = pd.DataFrame(contracts)
+    return contracts_df.sort_values(by=["Weighted Return", "Expected Future Volatility (%)"], ascending=[False, True]).head(3)
 
 # Streamlit UI setup
 st.title("Hedging Strategy Dashboard")
