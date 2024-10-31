@@ -60,7 +60,7 @@ def forecast_returns_and_volatility(commodity_data, duration):
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
-    for ((commodity, category), correlation) in best_correlations:
+    for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
         duration = 12  # Example duration
@@ -113,7 +113,7 @@ if quickbooks_file and commodity_file:
 
     # Sidebar options for selecting expense and commodity or auto-selection
     st.sidebar.subheader("Hedging Options")
-    selection_mode = st.sidebar.selectbox("Selection Mode", ["Auto-select Best", "Manual Selection"])
+    selection_mode = st.sidebar.selectbox("Selection Mode", ["Auto-select Best", "Manual Selection", "Specific Category"])
 
     if selection_mode == "Manual Selection":
         # Manual selection of category and commodity
@@ -151,6 +151,45 @@ if quickbooks_file and commodity_file:
         ax.set_ylabel("Savings ($)")
         st.pyplot(fig)
 
+    elif selection_mode == "Specific Category":
+        # Specific expense category selection for automatic best hedge finding
+        specific_category = st.sidebar.selectbox("Select Specific Expense Category", expense_df["Expense_Category"].unique())
+        specific_correlations = [(commodity, category, correlation) for (commodity, category), correlation in correlate_expenses_with_commodities(expense_df, commodity_df) if category == specific_category]
+        
+        if specific_correlations:
+            best_recommendations = recommend_best_hedges(commodity_df, expense_df, specific_correlations)
+
+            # Display top contract recommendations
+            st.subheader(f"Top Hedge Recommendations for {specific_category}")
+            for idx, rec in enumerate(best_recommendations, start=1):
+                st.write(f"### Recommendation {idx}")
+                st.write(f"**Commodity:** {rec['Commodity']}")
+                st.write(f"**Expense Category:** {rec['Category']}")
+                st.write(f"**Correlation with Expense:** {rec['Correlation']}")
+                st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return(%)']:.2f}")
+                st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
+                st.write(f"**Estimated Savings over Duration:** ${rec['Potential Savings']:.2f}")
+                st.write(f"**Explanation:** {rec['Explanation']}")
+
+                # Plot Monthly Returns for each recommendation
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
+                ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
+                ax.set_xlabel("Month")
+                ax.set_ylabel("Expected Return (%)")
+                st.pyplot(fig)
+
+                # Plot Potential Savings for each recommendation
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(x=[rec['Category']], y=[rec['Potential Savings']], ax=ax, color="green")
+                ax.set_title(f"Estimated Total Savings for {rec['Category']} Expense")
+                ax.set_xlabel("Expense Category")
+                ax.set_ylabel("Savings ($)")
+                st.pyplot(fig)
+
+        else:
+            st.write(f"No hedge recommendations found for the selected category: {specific_category}. Try adjusting criteria or choosing another category.")
+
     else:
         # Auto-select the best correlations and recommend hedges
         best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
@@ -158,8 +197,6 @@ if quickbooks_file and commodity_file:
 
         # Display top contract recommendations
         st.subheader("Top Hedge Recommendations")
-        sns.set_theme(style="whitegrid")
-
         for idx, rec in enumerate(best_recommendations, start=1):
             st.write(f"### Recommendation {idx}")
             st.write(f"**Commodity:** {rec['Commodity']}")
@@ -178,7 +215,7 @@ if quickbooks_file and commodity_file:
             ax.set_ylabel("Expected Return (%)")
             st.pyplot(fig)
 
-            # Plot Potential Savings as a bar chart
+            # Plot Potential Savings for each recommendation
             fig, ax = plt.subplots(figsize=(10, 6))
             sns.barplot(x=[rec['Category']], y=[rec['Potential Savings']], ax=ax, color="green")
             ax.set_title(f"Estimated Total Savings for {rec['Category']} Expense")
@@ -186,8 +223,6 @@ if quickbooks_file and commodity_file:
             ax.set_ylabel("Savings ($)")
             st.pyplot(fig)
 
-        if not best_recommendations:
-            st.write("No viable contracts were found. Please review the data or adjust criteria.")
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
