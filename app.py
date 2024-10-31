@@ -27,7 +27,7 @@ def load_commodity_data(file):
         st.stop()
 
 # Correlate multiple expenses with commodities
-def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
+def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
 
@@ -39,16 +39,16 @@ def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlatio
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
-    # Sort by correlation and return top results or fallback to non-correlated suggestions
+    # Sort and filter by correlation
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
     filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
 
-    # If no correlation matches, fallback to highest returns
+    # Fallback if no strong correlations
     if not filtered_correlations:
         st.write("No correlation match found; optimizing based solely on expected return.")
-        return [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]
+        return [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]  # Fallback based on top returns
 
-    return filtered_correlations[:3]  # Top correlated results
+    return filtered_correlations[:3]  # Top correlated items
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -68,15 +68,27 @@ def forecast_returns_and_volatility(commodity_data, duration):
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
-    for (commodity, category), correlation in best_correlations:
+    # Verify structure of best_correlations
+    if not isinstance(best_correlations, list) or not best_correlations:
+        st.error("No valid correlations or return-based recommendations found.")
+        return recommendations
+
+    for correlation_data in best_correlations:
+        try:
+            (commodity, category), correlation = correlation_data
+        except ValueError:
+            st.error("Unexpected structure in correlation data.")
+            return recommendations
+
+        # Process commodity and category
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-        duration = 12  # Fixed duration
+        duration = 12
 
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
-        estimated_savings = avg_monthly_expense * (monthly_returns.mean() / 100) * duration
 
+        estimated_savings = avg_monthly_expense * (monthly_returns.mean() / 100) * duration
         if estimated_savings > 0:
             recommendations.append({
                 "Commodity": commodity,
@@ -88,7 +100,9 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
                 "Monthly Returns": monthly_returns.tolist()
             })
 
-    return recommendations if recommendations else [{"Message": "No positive savings hedges found; review data or strategy."}]
+    if not recommendations:
+        recommendations.append({"Message": "No positive savings hedges found; review data or strategy."})
+    return recommendations
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -100,7 +114,6 @@ if quickbooks_file and commodity_file:
     expense_df, cash_flow_df, balance_sheet_df, pnl_df = load_quickbooks_data(quickbooks_file)
     commodity_df = load_commodity_data(commodity_file)
 
-    # Sidebar options for selecting expense and commodity or auto-selection
     st.sidebar.subheader("Hedging Options")
     selection_mode = st.sidebar.selectbox("Selection Mode", ["Auto-select Best", "Manual Selection"])
 
