@@ -58,21 +58,23 @@ def calculate_volatility_and_seasonality(commodity_df):
     return volatility * 100, high_season  # Return volatility as percentage and high season
 
 # Improved function to predict returns and volatility using ARIMA and GARCH models
-def forecast_returns_and_volatility(commodity_data, duration):
-    # ARIMA model to predict return
+def forecast_returns_and_volatility(commodity_data, duration_months):
+    """
+    Forecasts monthly returns and volatility for the specified duration using ARIMA for returns and GARCH for volatility.
+    """
+    # ARIMA Model for Return Prediction (Monthly Forecasts)
     model_arima = ARIMA(commodity_data['Commodity_Price'], order=(1, 1, 1))
     arima_fit = model_arima.fit()
-    arima_forecast = arima_fit.forecast(steps=duration)
-    expected_future_return = arima_forecast.mean() / commodity_data['Commodity_Price'].iloc[-1] - 1
+    arima_forecast = arima_fit.forecast(steps=duration_months)
+    expected_future_returns = (arima_forecast / commodity_data['Commodity_Price'].iloc[-1] - 1) * 100
 
-    # GARCH model to predict volatility
+    # GARCH Model for Volatility Prediction (Monthly Forecasts)
     model_garch = arch_model(commodity_data['Daily_Return'].dropna(), vol='Garch', p=1, q=1)
     garch_fit = model_garch.fit(disp="off")
-    garch_forecast = garch_fit.forecast(horizon=duration)
-    expected_future_volatility = np.sqrt(garch_forecast.variance.values[-1, :]).mean() * 100  # Annualized volatility
-
-    return expected_future_return * 100, expected_future_volatility  # Return percentage values
-
+    garch_forecast = garch_fit.forecast(horizon=duration_months)
+    expected_future_volatility = np.sqrt(garch_forecast.variance.values[-1]) * 100  # Annualized monthly volatility
+    
+    return expected_future_returns, expected_future_volatility
 # Function to assess company's financial health and risk tolerance
 def assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df):
     # Calculate average cash flow and stability
@@ -131,61 +133,62 @@ def recommend_hedge_duration(volatility, financial_profile, expense_df):
     return hedge_duration  # Return the recommended hedge duration
 
 # Function to recommend contracts based on forecasts using ARIMA and GARCH models
-def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile):
-    # Filter data for selected commodity and compute daily returns
+def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile, primary_cost):
+    """
+    Recommends the best contract based on positive expected future return, adjusted for the primary cost.
+    If no contract meets the positive future return criteria, no contract is recommended.
+    """
     commodity_data = commodity_df[commodity_df['Commodity'] == selected_commodity]
     commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
     selected_durations = select_contract_durations(hedge_duration)
     contracts = []
 
     for duration in selected_durations:
+        # Get historical data up to the desired number of months
         historical_data = commodity_data.tail(duration * 20)
         if historical_data.empty or len(historical_data) < 2:
             continue
 
-        # Calculate historical return and volatility
-        historical_return = historical_data["Daily_Return"].mean() * duration * 20
+        # Historical metrics for monthly data points
+        historical_returns = historical_data["Daily_Return"].mean() * duration * 20
         historical_volatility = historical_data["Daily_Return"].std() * np.sqrt(252)
+        
+        # Forecast monthly returns and volatility for the entire duration
+        expected_future_returns, expected_future_volatility = forecast_returns_and_volatility(historical_data, duration)
+        
+        # Calculate cumulative expected future return for the contract
+        cumulative_future_return = expected_future_returns.sum()
 
-        # Predict future return and volatility using ARIMA and GARCH
-        expected_future_return, expected_future_volatility = forecast_returns_and_volatility(historical_data, duration)
+        # Only consider contracts with a positive future return relative to primary cost
+        if cumulative_future_return > primary_cost:
+            contracts.append({
+                "Duration (months)": duration,
+                "Historical Returns (%)": list(historical_returns * 100),
+                "Historical Volatility (%)": list(historical_volatility * 100),
+                "Expected Future Returns (%)": list(expected_future_returns),
+                "Expected Future Volatility (%)": list(expected_future_volatility)
+            })
 
-        contracts.append({
-            "Duration (months)": duration,
-            "Historical Average Return (%)": round(historical_return * 100, 2),
-            "Historical Volatility (%)": round(historical_volatility * 100, 2),
-            "Expected Future Return (%)": round(expected_future_return, 2),
-            "Expected Future Volatility (%)": round(expected_future_volatility, 2)
-        })
-
-    # Select best contract based on risk tolerance and future projections
+    # Select the best contract based on positive expected return adjusted for risk tolerance
     if contracts:
-        best_contract = (min(contracts, key=lambda x: x["Historical Volatility (%)"]) if financial_profile["risk_tolerance"] == "High"
-                         else max(contracts, key=lambda                          x: x["Expected Future Return (%)"] / (x["Expected Future Volatility (%)"] + 1)))
-        return best_contract, contracts  # Return the best contract and all contracts for comparison
+        best_contract = (min(contracts, key=lambda x: x["Expected Future Volatility (%)"]) if financial_profile["risk_tolerance"] == "High"
+                         else max(contracts, key=lambda x: sum(x["Expected Future Returns (%)"]) / sum(x["Expected Future Volatility (%)"])))
+        return best_contract, contracts
     else:
-        return None, None  # Return None if no suitable contracts were found
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns  # For improved visualization aesthetics
+        return None, None
 
 # Streamlit UI
 st.title("Hedging Strategy Dashboard")
 st.sidebar.header("Upload Files")
 
-# File uploader for QuickBooks and Commodity Data
 quickbooks_file = st.sidebar.file_uploader("Upload QuickBooks Data (Excel)", type=["xlsx"])
 commodity_file = st.sidebar.file_uploader("Upload Commodity Options Data (Excel)", type=["xlsx"])
 
 if quickbooks_file and commodity_file:
-    # Load data
     expense_df, cash_flow_df, balance_sheet_df, pnl_df = load_quickbooks_data(quickbooks_file)
     commodity_df = load_commodity_data(commodity_file)
 
-    # Sidebar option for primary cost category selection
+    # UI options for cost and commodity selection
     st.sidebar.subheader("Primary Cost Category Selection")
     category_option = st.sidebar.selectbox("Choose primary cost selection method:", ["Auto-select", "Manual"])
     manual_category = None
@@ -193,75 +196,53 @@ if quickbooks_file and commodity_file:
         available_categories = expense_df["Expense_Category"].unique()
         manual_category = st.sidebar.selectbox("Select a primary cost category:", available_categories)
 
-    # Determine primary cost and commodity
     primary_cost_category, primary_cost = select_primary_cost(expense_df, manual_category)
 
-    # Commodity selection for hedging
     st.sidebar.subheader("Commodity Selection for Hedging")
     commodity_option = st.sidebar.selectbox("Choose commodity selection method:", ["Auto-select", "Manual"])
+    selected_commodity = st.sidebar.selectbox("Select a commodity:", commodity_df["Commodity"].unique()) if commodity_option == "Manual" else auto_select_commodity(expense_df, commodity_df)[0]
 
-    if commodity_option == "Manual":
-        selected_commodity = st.sidebar.selectbox("Select a commodity:", commodity_df["Commodity"].unique())
-        correlation_value = "N/A (manual selection)"
-    else:
-        selected_commodity, correlation_value = auto_select_commodity(expense_df, commodity_df)
-
-    # Display formatted analysis parameters
-    st.markdown("### Selected Analysis Parameters")
-    st.write(f"**Primary Cost Category:** `{primary_cost_category}`")
-    st.write(f"**Selected Commodity for Hedging:** `{selected_commodity}`")
-    st.write(f"**Correlation with Expense:** `{correlation_value:.2f}`" if correlation_value != "N/A (manual selection)" else correlation_value)
-    st.markdown("---")  # Divider for clarity
-
-    # Process selected commodity data
+    # Calculate metrics and find best contract
     selected_commodity_data = commodity_df[commodity_df["Commodity"] == selected_commodity]
     volatility, high_season = calculate_volatility_and_seasonality(selected_commodity_data)
     financial_profile = assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df)
     hedge_duration = recommend_hedge_duration(volatility, financial_profile, expense_df)
-    best_contract, contracts = recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile)
+    best_contract, contracts = recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile, primary_cost)
 
-    # Display formatted contract and volatility details
-    st.markdown("### Analysis Summary")
-    st.write(f"**Commodity Volatility (%):** `{round(volatility, 2)}`")
-    st.write(f"**High Season:** `{high_season}`")
-    st.write(f"**Recommended Hedge Duration:** `{hedge_duration}`")
-    st.markdown("---")  # Divider for clarity
+    # Display analysis parameters and recommended contract
+    st.header("Selected Analysis Parameters")
+    st.write(f"**Primary Cost Category**: {primary_cost_category}")
+    st.write(f"**Selected Commodity for Hedging**: {selected_commodity}")
+    st.write(f"**Primary Cost Value**: {primary_cost}")
+    st.write(f"**Commodity Volatility (%)**: {round(volatility, 2)}")
+    st.write(f"**High Season**: {high_season}")
+    st.write(f"**Recommended Hedge Duration**: {hedge_duration}")
 
-    # Display best contract recommendation
     if best_contract:
-        st.markdown("### Best Contract Recommendation")
-        st.json(best_contract, expanded=True)  # Use JSON display for structured data format
+        st.subheader("Best Contract Recommendation")
+        st.write(best_contract)
 
-        # Visualize historical and expected returns and volatilities
-        contract_durations = [c["Duration (months)"] for c in contracts]
-        historical_returns = [c["Historical Average Return (%)"] for c in contracts]
-        historical_volatility = [c["Historical Volatility (%)"] for c in contracts]
-        expected_returns = [c["Expected Future Return (%)"] for c in contracts]
-        expected_volatility = [c["Expected Future Volatility (%)"] for c in contracts]
+        # Plot Historical and Expected Monthly Returns and Volatility
+        fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-        # Set Seaborn style for improved aesthetics
-        sns.set_style("whitegrid")
-        fig, axs = plt.subplots(2, 1, figsize=(12, 10), constrained_layout=True)
-
-        # Historical Return vs Volatility
-        sns.barplot(x=contract_durations, y=historical_returns, color='skyblue', ax=axs[0], label='Historical Return (%)')
-        axs[0].plot(contract_durations, historical_volatility, color='red', marker='o', label='Historical Volatility (%)')
-        axs[0].set_title("Historical Return and Volatility by Duration")
-        axs[0].set_xlabel("Contract Duration (months)")
-        axs[0].set_ylabel("Percentage (%)")
+        # Monthly Historical Returns and Volatility
+        axs[0].plot(best_contract["Historical Returns (%)"], label='Monthly Historical Return (%)', color='blue')
+        axs[0].plot(best_contract["Historical Volatility (%)"], label='Monthly Historical Volatility (%)', color='red')
+        axs[0].set_title("Monthly Historical Return and Volatility")
         axs[0].legend()
+        axs[0].set_xlabel("Months")
+        axs[0].set_ylabel("Percentage (%)")
 
-        # Expected Future Return vs Volatility
-        sns.barplot(x=contract_durations, y=expected_returns, color='lightgreen', ax=axs[1], label='Expected Future Return (%)')
-        axs[1].plot(contract_durations, expected_volatility, color='purple', marker='o', label='Expected Future Volatility (%)')
-        axs[1].set_title("Expected Future Return and Volatility by Duration")
-        axs[1].set_xlabel("Contract Duration (months)")
-        axs[1].set_ylabel("Percentage (%)")
+        # Monthly Expected Future Returns and Volatility
+        axs[1].plot(best_contract["Expected Future Returns (%)"], label='Monthly Expected Future Return (%)', color='green')
+        axs[1].plot(best_contract["Expected Future Volatility (%)"], label='Monthly Expected Future Volatility (%)', color='purple')
+        axs[1].set_title("Monthly Expected Future Return and Volatility")
         axs[1].legend()
+        axs[1].set_xlabel("Months")
+        axs[1].set_ylabel("Percentage (%)")
 
-        # Display the improved charts in Streamlit
+        plt.tight_layout()
         st.pyplot(fig)
-
     else:
         st.write("No viable contracts were found based on the given data.")
 else:
