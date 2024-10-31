@@ -67,11 +67,11 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend contracts based on best expense-commodity correlations
+# Recommend contracts based on best expense-commodity correlations, ensuring only positive savings
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
-    for commodity, category, correlation in best_correlations:
+    for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
         duration = 12  # Example duration
@@ -79,19 +79,38 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
 
-        # Calculate potential savings over duration
+        # Calculate potential savings over duration and filter for positive savings
         estimated_savings = avg_monthly_expense * (monthly_returns.mean() / 100) * duration
-        recommendations.append({
-            "Commodity": commodity,
-            "Category": category,
-            "Correlation": correlation,
-            "Expected Monthly Return (%)": monthly_returns.mean(),
-            "Expected Volatility (%)": volatility.mean(),
-            "Potential Savings": round(estimated_savings, 2),
-            "Monthly Returns": monthly_returns.tolist()
-        })
+        if estimated_savings > 0:
+            recommendations.append({
+                "Commodity": commodity,
+                "Category": category,
+                "Correlation": round(correlation, 2),
+                "Expected Monthly Return (%)": monthly_returns.mean(),
+                "Expected Volatility (%)": volatility.mean(),
+                "Potential Savings": round(estimated_savings, 2),
+                "Monthly Returns": monthly_returns.tolist()
+            })
 
-    return recommendations
+    # Ensure at least one recommendation is returned by displaying best expected return
+    if not recommendations:
+        best_correlations_by_return = sorted(best_correlations, key=lambda x: x[1], reverse=True)
+        for (commodity, category), correlation in best_correlations_by_return[:3]:
+            commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
+            commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
+            monthly_returns, _ = forecast_returns_and_volatility(commodity_data, duration)
+            recommendations.append({
+                "Commodity": commodity,
+                "Category": category,
+                "Correlation": 0,
+                "Expected Monthly Return (%)": monthly_returns.mean(),
+                "Expected Volatility (%)": 0,
+                "Potential Savings": max(0, round(estimated_savings, 2)),
+                "Monthly Returns": monthly_returns.tolist()
+            })
+
+    return recommendations[:3]  # Return top 3 recommendations
+
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
