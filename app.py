@@ -21,18 +21,20 @@ def select_primary_cost(expense_df, manual_category=None):
         primary_cost = expense_summary.max()
     return primary_cost_category, primary_cost
 
-def map_expense_to_commodity(expense_category):
-    commodity_mapping = {
-        "Food Supplies": "Corn",
-        "Beverages": "Sugar",
-        "Utilities": "Natural Gas",
-        "Cleaning Supplies": "Cotton",
-        "Packaging": "Wheat"
-    }
-    return commodity_mapping.get(expense_category, "Corn")
-
 def load_commodity_data(file_path):
     return pd.read_excel(file_path)
+
+def auto_select_commodity(expense_df, commodity_df):
+    expense_monthly_totals = expense_df.groupby(expense_df['Date'].dt.to_period("M"))["Amount"].sum()
+    correlations = {}
+    for commodity in commodity_df["Commodity"].unique():
+        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
+        commodity_prices = commodity_prices.resample("M").mean()
+        combined = pd.DataFrame({"Expense": expense_monthly_totals, "Commodity": commodity_prices}).dropna()
+        correlation = combined["Expense"].corr(combined["Commodity"])
+        correlations[commodity] = correlation
+    best_commodity = max(correlations, key=correlations.get)
+    return best_commodity, correlations[best_commodity]
 
 def calculate_volatility_and_seasonality(commodity_df):
     commodity_df["Daily_Return"] = commodity_df["Commodity_Price"].pct_change()
@@ -78,21 +80,8 @@ def select_contract_durations(hedge_duration):
     }
     return contract_durations[hedge_duration]
 
-def recommend_hedge_duration(volatility, financial_profile, expense_df):
-    monthly_expenses = expense_df.groupby(expense_df['Date'].dt.month)["Amount"].sum()
-    high_season = monthly_expenses.idxmax() if monthly_expenses.max() > 1.5 * monthly_expenses.mean() else None
-    
-    if volatility > 25 or financial_profile["risk_tolerance"] == "High" or high_season:
-        hedge_duration = "Short-Term (1-3 months)"
-    elif 15 < volatility <= 25 or financial_profile["risk_tolerance"] == "Moderate":
-        hedge_duration = "Medium-Term (3-12 months)"
-    else:
-        hedge_duration = "Long-Term (12+ months)"
-    
-    return hedge_duration
-
-def recommend_contracts_and_select_best(commodity_df, primary_commodity, hedge_duration, financial_profile):
-    commodity_data = commodity_df[commodity_df['Commodity'] == primary_commodity]
+def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile):
+    commodity_data = commodity_df[commodity_df['Commodity'] == selected_commodity]
     selected_durations = select_contract_durations(hedge_duration)
     contracts = []
 
@@ -134,33 +123,38 @@ quickbooks_file = st.sidebar.file_uploader("Upload QuickBooks Data (Excel)", typ
 commodity_file = st.sidebar.file_uploader("Upload Commodity Options Data (Excel)", type=["xlsx"])
 
 if quickbooks_file and commodity_file:
-    # Load data
     expense_df, cash_flow_df, balance_sheet_df, pnl_df = load_quickbooks_data(quickbooks_file)
+    commodity_df = load_commodity_data(commodity_file)
 
-    # Option to auto-select or manually choose primary cost category
     st.sidebar.subheader("Primary Cost Category Selection")
     category_option = st.sidebar.selectbox("Choose primary cost selection method:", ["Auto-select", "Manual"])
-
     manual_category = None
     if category_option == "Manual":
         available_categories = expense_df["Expense_Category"].unique()
         manual_category = st.sidebar.selectbox("Select a primary cost category:", available_categories)
 
-    # Run analysis
     primary_cost_category, primary_cost = select_primary_cost(expense_df, manual_category)
-    mapped_commodity = map_expense_to_commodity(primary_cost_category)
-    commodity_df = load_commodity_data(commodity_file)
-    volatility, high_season = calculate_volatility_and_seasonality(commodity_df[commodity_df["Commodity"] == mapped_commodity])
+
+    st.sidebar.subheader("Commodity Selection for Hedging")
+    commodity_option = st.sidebar.selectbox("Choose commodity selection method:", ["Auto-select", "Manual"])
+
+    if commodity_option == "Manual":
+        selected_commodity = st.sidebar.selectbox("Select a commodity:", commodity_df["Commodity"].unique())
+        correlation_value = "N/A (manual selection)"
+    else:
+        selected_commodity, correlation_value = auto_select_commodity(expense_df, commodity_df)
+
+    st.header("Selected Analysis Parameters")
+    st.write(f"**Primary Cost Category**: {primary_cost_category}")
+    st.write(f"**Selected Commodity for Hedging**: {selected_commodity}")
+    st.write(f"**Correlation with Expense**: {correlation_value:.2f}" if correlation_value != "N/A (manual selection)" else correlation_value)
+
+    selected_commodity_data = commodity_df[commodity_df["Commodity"] == selected_commodity]
+    volatility, high_season = calculate_volatility_and_seasonality(selected_commodity_data)
     financial_profile = assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df)
     hedge_duration = recommend_hedge_duration(volatility, financial_profile, expense_df)
-    best_contract, contracts = recommend_contracts_and_select_best(commodity_df, mapped_commodity, hedge_duration, financial_profile)
+    best_contract, contracts = recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile)
 
-    # Display results
-    st.header("Analysis Results")
-    st.subheader("Primary Information")
-    st.write(f"**Primary Cost Category**: {primary_cost_category}")
-    st.write(f"**Mapped Commodity**: {mapped_commodity}")
-    st.write(f"**Financial Profile**: {financial_profile}")
     st.write(f"**Commodity Volatility (%)**: {round(volatility, 2)}")
     st.write(f"**High Season**: {high_season}")
     st.write(f"**Recommended Hedge Duration**: {hedge_duration}")
@@ -178,7 +172,7 @@ if quickbooks_file and commodity_file:
 
         fig, axs = plt.subplots(2, 1, figsize=(10, 8))
 
-                # Historical Return vs Volatility
+        # Historical Return vs Volatility
         axs[0].bar(contract_durations, historical_returns, color='blue', label='Historical Return (%)')
         axs[0].plot(contract_durations, historical_volatility, color='red', marker='o', label='Historical Volatility (%)')
         axs[0].set_title("Historical Return and Volatility by Duration")
