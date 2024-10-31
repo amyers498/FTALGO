@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from statsmodels.tsa.arima.model import ARIMA
+from arch import arch_model  # Ensure 'arch' is installed for GARCH model
 
 # Define functions for analysis
 def load_quickbooks_data(file_path):
@@ -43,6 +45,22 @@ def calculate_volatility_and_seasonality(commodity_df):
     monthly_avg = commodity_df.groupby("Month")["Commodity_Price"].mean()
     high_season = monthly_avg.idxmax() if monthly_avg.max() > 1.5 * monthly_avg.mean() else None
     return volatility * 100, high_season
+
+# Improved Forecasting Model using ARIMA and GARCH
+def forecast_returns_and_volatility(commodity_data, duration):
+    # ARIMA Model for Return Prediction
+    model_arima = ARIMA(commodity_data['Commodity_Price'], order=(1, 1, 1))
+    arima_fit = model_arima.fit()
+    arima_forecast = arima_fit.forecast(steps=duration)
+    expected_future_return = arima_forecast.mean() / commodity_data['Commodity_Price'].iloc[-1] - 1
+
+    # GARCH Model for Volatility Prediction
+    model_garch = arch_model(commodity_data['Daily_Return'].dropna(), vol='Garch', p=1, q=1)
+    garch_fit = model_garch.fit(disp="off")
+    garch_forecast = garch_fit.forecast(horizon=duration)
+    expected_future_volatility = np.sqrt(garch_forecast.variance.values[-1, :]).mean() * 100  # Annualized volatility in %
+
+    return expected_future_return * 100, expected_future_volatility
 
 def assess_financial_profile(cash_flow_df, balance_sheet_df, pnl_df):
     avg_cash_inflow = cash_flow_df["Cash_Inflow"].mean()
@@ -93,8 +111,10 @@ def recommend_hedge_duration(volatility, financial_profile, expense_df):
     
     return hedge_duration
 
+# Improved recommendation for contracts using ARIMA and GARCH predictions
 def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile):
     commodity_data = commodity_df[commodity_df['Commodity'] == selected_commodity]
+    commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
     selected_durations = select_contract_durations(hedge_duration)
     contracts = []
 
@@ -103,24 +123,22 @@ def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_
         if historical_data.empty or len(historical_data) < 2:
             continue
 
-        historical_data['Daily_Return'] = historical_data['Commodity_Price'].pct_change()
-        historical_return = historical_data['Daily_Return'].mean() * duration * 20
-        historical_volatility = historical_data['Daily_Return'].std() * np.sqrt(252)
-        
-        try:
-            recent_trend = historical_data['Commodity_Price'].iloc[-1] / historical_data['Commodity_Price'].iloc[0]
-            expected_future_return = historical_return * recent_trend
-            expected_future_volatility = historical_volatility * np.sqrt(recent_trend)
-            contracts.append({
-                "Duration (months)": duration,
-                "Historical Average Return (%)": round(historical_return * 100, 2),
-                "Historical Volatility (%)": round(historical_volatility * 100, 2),
-                "Expected Future Return (%)": round(expected_future_return * 100, 2),
-                "Expected Future Volatility (%)": round(expected_future_volatility * 100, 2)
-            })
-        except IndexError:
-            continue
+        # Historical metrics
+        historical_return = historical_data["Daily_Return"].mean() * duration * 20
+        historical_volatility = historical_data["Daily_Return"].std() * np.sqrt(252)
 
+        # Use ARIMA and GARCH for expected future metrics
+        expected_future_return, expected_future_volatility = forecast_returns_and_volatility(historical_data, duration)
+
+        contracts.append({
+            "Duration (months)": duration,
+            "Historical Average Return (%)": round(historical_return * 100, 2),
+            "Historical Volatility (%)": round(historical_volatility * 100, 2),
+            "Expected Future Return (%)": round(expected_future_return, 2),
+            "Expected Future Volatility (%)": round(expected_future_volatility, 2)
+        })
+
+    # Select the best contract based on risk tolerance and future return vs volatility
     if contracts:
         best_contract = (min(contracts, key=lambda x: x["Historical Volatility (%)"]) if financial_profile["risk_tolerance"] == "High"
                          else max(contracts, key=lambda x: x["Expected Future Return (%)"] / (x["Expected Future Volatility (%)"] + 1)))
@@ -128,7 +146,8 @@ def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_
     else:
         return None, None
 
-# Streamlit UI
+# Streamlit UI 
+
 st.title("Hedging Strategy Dashboard")
 st.sidebar.header("Upload Files")
 
