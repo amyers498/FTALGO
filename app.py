@@ -31,7 +31,6 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
 
-    # Test all combinations of expenses and commodities without retry limits
     for commodity in commodity_df["Commodity"].unique():
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean()
         for category in expense_monthly_totals.columns:
@@ -79,24 +78,8 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
                 "Expected Monthly Return (%)": monthly_returns.mean(),
                 "Expected Volatility (%)": volatility.mean(),
                 "Potential Savings": round(estimated_savings, 2),
-                "Monthly Returns": monthly_returns.tolist()
-            })
-
-    # Ensure at least one recommendation is returned by displaying best expected return
-    if not recommendations:
-        best_correlations_by_return = sorted(best_correlations, key=lambda x: x[1], reverse=True)
-        for (commodity, category), correlation in best_correlations_by_return[:3]:
-            commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
-            commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-            monthly_returns, _ = forecast_returns_and_volatility(commodity_data, duration)
-            recommendations.append({
-                "Commodity": commodity,
-                "Category": category,
-                "Correlation": 0,
-                "Expected Monthly Return (%)": monthly_returns.mean(),
-                "Expected Volatility (%)": 0,
-                "Potential Savings": max(0, round(estimated_savings, 2)),
-                "Monthly Returns": monthly_returns.tolist()
+                "Monthly Returns": monthly_returns.tolist(),
+                "Explanation": f"This hedge was selected for {category} due to a {round(correlation * 100, 1)}% correlation with {commodity}, offering stable returns and helping to control price fluctuations."
             })
 
     return recommendations[:3]  # Return top 3 recommendations
@@ -110,6 +93,23 @@ commodity_file = st.sidebar.file_uploader("Upload Commodity Options Data (Excel)
 if quickbooks_file and commodity_file:
     expense_df, cash_flow_df, balance_sheet_df, pnl_df = load_quickbooks_data(quickbooks_file)
     commodity_df = load_commodity_data(commodity_file)
+
+    # Monthly and average expenses
+    st.header("Company's Expense Overview")
+    last_12_months = expense_df[expense_df['Date'] >= (expense_df['Date'].max() - pd.DateOffset(months=12))]
+    avg_monthly_expense = last_12_months.groupby('Expense_Category')["Amount"].mean().sum()
+
+    st.write(f"**Average Monthly Expenses:** ${avg_monthly_expense:.2f}")
+    st.write("### Monthly Expenses by Category in the Past 12 Months")
+    monthly_expenses = last_12_months.groupby([last_12_months['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack()
+
+    # Display bar chart for monthly expenses by category
+    fig, ax = plt.subplots(figsize=(12, 6))
+    monthly_expenses.plot(kind='bar', stacked=True, ax=ax)
+    ax.set_title("Monthly Expenses by Category (Last 12 Months)")
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Expense Amount ($)")
+    st.pyplot(fig)
 
     # Sidebar options for selecting expense and commodity or auto-selection
     st.sidebar.subheader("Hedging Options")
@@ -162,18 +162,14 @@ if quickbooks_file and commodity_file:
 
         for idx, rec in enumerate(best_recommendations, start=1):
             st.write(f"### Recommendation {idx}")
-            if "Message" in rec:
-                st.write(rec["Message"])
-                break  # Exit if only a message is available
-
             st.write(f"**Commodity:** {rec['Commodity']}")
             st.write(f"**Expense Category:** {rec['Category']}")
             st.write(f"**Correlation with Expense:** {rec['Correlation']}")
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Estimated Savings over Duration:** ${rec['Potential Savings']:.2f}")
-
-            # Plot Monthly Returns
+            st.write(f"**Explanation:** {rec['Explanation']}")
+                        # Plot Monthly Returns
             fig, ax = plt.subplots(figsize=(10, 6))
             sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
             ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
@@ -193,4 +189,5 @@ if quickbooks_file and commodity_file:
             st.write("No viable contracts were found. Please review the data or adjust criteria.")
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
+
 
