@@ -26,7 +26,7 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate expenses with commodities, loosening correlation until finding top returns if no correlation match
+# Correlate multiple expenses with commodities, ensuring at least one hedge is found
 def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
@@ -41,17 +41,18 @@ def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlatio
 
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
 
+    # Loosen correlation threshold until at least one or three recommendations are found
     attempt = 0
     while attempt < max_attempts:
         filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
-        if filtered_correlations:
-            return filtered_correlations[:3]
-        min_correlation -= 0.05
+        if len(filtered_correlations) >= 1:
+            return filtered_correlations[:3]  # Top 1 to 3 matches above min_correlation
+        min_correlation -= 0.05  # Loosen threshold incrementally
         attempt += 1
 
-    # No high correlation match; use top returns and set correlation to 0
-    best_correlations = [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]
-    return best_correlations
+    # If no correlations match, return top results by expected return
+    st.write("No high correlation match found; displaying top results by return.")
+    return best_correlations[:3]
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -110,7 +111,6 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
             })
 
     return recommendations[:3]  # Return top 3 recommendations
-
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -173,6 +173,10 @@ if quickbooks_file and commodity_file:
 
         for idx, rec in enumerate(best_recommendations, start=1):
             st.write(f"### Recommendation {idx}")
+            if "Message" in rec:
+                st.write(rec["Message"])
+                break  # Exit if only a message is available
+
             st.write(f"**Commodity:** {rec['Commodity']}")
             st.write(f"**Expense Category:** {rec['Category']}")
             st.write(f"**Correlation with Expense:** {rec['Correlation']}")
@@ -195,3 +199,9 @@ if quickbooks_file and commodity_file:
             ax.set_xlabel("Expense Category")
             ax.set_ylabel("Savings ($)")
             st.pyplot(fig)
+
+        if not best_recommendations:
+            st.write("No viable contracts were found. Please review the data or adjust criteria.")
+else:
+    st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
+
