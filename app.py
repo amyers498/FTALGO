@@ -27,10 +27,14 @@ def load_commodity_data(file):
         st.stop()
 
 # Correlate all expenses with all commodities
+# Correlate all expenses with all commodities
 def correlate_expenses_with_commodities(expense_df, commodity_df):
     # Calculate monthly totals for expenses
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack()
     expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
+
+    # Debug: Print date range for expense data
+    st.write("Expense data date range:", expense_monthly_totals.index.min(), "to", expense_monthly_totals.index.max())
 
     correlations = {}
 
@@ -38,22 +42,39 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
         # Resample commodity prices to monthly averages
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
 
+        # Debug: Print date range for each commodity
+        st.write(f"Commodity '{commodity}' date range:", commodity_prices.index.min(), "to", commodity_prices.index.max())
+
         for category in expense_monthly_totals.columns:
-            # Combine data without filling missing values with 0
-            combined = pd.DataFrame({"Expense": expense_monthly_totals[category].astype(float), "Commodity": commodity_prices.astype(float)})
-            combined.dropna(inplace=True)  # Drop rows with NaN values to ensure proper correlation calculation
-            
-            # Streamlit debugging to verify data alignment and content before correlation
-            st.write(f"Combined data for {commodity} and {category}:", combined.head())
+            # Align date ranges by slicing to the overlapping period
+            aligned_expense = expense_monthly_totals[category].loc[
+                expense_monthly_totals.index.intersection(commodity_prices.index.to_timestamp())
+            ]
+            aligned_commodity = commodity_prices.loc[
+                commodity_prices.index.intersection(aligned_expense.index.to_period("M"))
+            ]
+
+            # Combine aligned data and drop NaN values
+            combined = pd.DataFrame({"Expense": aligned_expense, "Commodity": aligned_commodity})
+            combined.dropna(inplace=True)  # Drop rows with NaN values
+
+            # Debugging output to verify data content before correlation
+            st.write(f"Combined data for {commodity} and {category}:")
+            st.write(combined.head())
 
             # Calculate and store correlation
-            correlation = combined["Expense"].corr(combined["Commodity"])
+            if not combined.empty:
+                correlation = combined["Expense"].corr(combined["Commodity"])
+            else:
+                correlation = None  # No data overlap
+
             correlations[(commodity, category)] = correlation
-            st.write(f"Correlation between {commodity} and {category}: {correlation}")  # Debug correlation output
+            st.write(f"Correlation between {commodity} and {category}: {correlation}")
 
     # Sort and return the correlations
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]) if x[1] is not None else 0, reverse=True)
     return best_correlations
+
 
 # Correlate a specific expense category with all commodities
 def correlate_specific_category(expense_df, commodity_df, category):
