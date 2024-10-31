@@ -169,7 +169,7 @@ if quickbooks_file and commodity_file:
 
     else:
         # Auto-select the best correlations
-                best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
+        best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
         best_recommendations = recommend_best_hedges(commodity_df, expense_df, best_correlations)
 
         # Display top recommendations
