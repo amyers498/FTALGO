@@ -26,8 +26,12 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate all expenses with all commodities
+# Correlate all expenses with all commodities with enhanced debugging
 def correlate_expenses_with_commodities(expense_df, commodity_df):
+    # Convert dates to datetime format if necessary
+    expense_df['Date'] = pd.to_datetime(expense_df['Date'])
+    commodity_df['Date'] = pd.to_datetime(commodity_df['Date'])
+
     # Calculate monthly totals for expenses
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
@@ -36,107 +40,47 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
 
     for commodity in commodity_df["Commodity"].unique():
         # Resample commodity prices to monthly averages
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
+        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean()
+
+        # Debug date range for commodity
+        st.write(f"Commodity '{commodity}' date range:", commodity_prices.index.min(), "to", commodity_prices.index.max())
 
         for category in expense_monthly_totals.columns:
-            # Combine and align data without filling missing values with 0
+            # Align expense and commodity data on the date index
             combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices})
-            combined.dropna(inplace=True)  # Drop rows with NaN values to ensure proper correlation calculation
+            combined.dropna(inplace=True)  # Remove any rows with NaN values to ensure proper correlation
+
+            # Debug: Check if combined data is empty
+            if combined.empty:
+                st.write(f"Combined data for {commodity} and {category} is empty (no overlapping dates).")
+                correlations[(commodity, category)] = None
+                continue
             
-            # Debugging prints to verify data alignment and content before correlation
-            print(f"Combined data for {commodity} and {category}:")
-            print(combined.head())
+            # Debug: Print the first few rows of combined data to check alignment
+            st.write(f"Combined data for {commodity} and {category}:")
+            st.write(combined.head())
 
-            # Calculate and store correlation
+            # Calculate and store correlation only if there is data in combined
             correlation = combined["Expense"].corr(combined["Commodity"])
-            correlations[(commodity, category)] = correlation
-            print(f"Correlation between {commodity} and {category}: {correlation}")  # Debug correlation output
+            if pd.isna(correlation):
+                st.write(f"Correlation for {commodity} and {category} is NaN due to insufficient data.")
+                correlations[(commodity, category)] = None
+            else:
+                correlations[(commodity, category)] = correlation
+                st.write(f"Correlation between {commodity} and {category}: {correlation}")
 
-    # Sort and return the correlations
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    # Sort and return correlations, filtering out any None values
+    best_correlations = sorted([(key, corr) for key, corr in correlations.items() if corr is not None], key=lambda x: abs(x[1]), reverse=True)
     return best_correlations
 
-
-# Correlate a specific expense category with all commodities
-def correlate_specific_category(expense_df, commodity_df, category):
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
-    expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
-    
-    correlations = {}
-
-    if category not in expense_monthly_totals.columns:
-        st.warning(f"No data found for the selected category: {category}")
-        return []
-
-    for commodity in commodity_df["Commodity"].unique():
-        # Resample and align commodity prices
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
-        
-        # Combine and align data without filling missing values with 0
-        combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices})
-        combined.dropna(inplace=True)  # Drop rows with NaN values
-
-        # Calculate correlation
-        correlation = combined["Expense"].corr(combined["Commodity"])
-        correlations[(commodity, category)] = correlation
-
-    # Sort and return top correlations
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations[:3]
-
-
-
-
-
-# Correlate a specific expense category with all commodities
-def correlate_specific_category(expense_df, commodity_df, category):
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
-    expense_monthly_totals.index = expense_monthly_totals.index.to_timestamp()
-    
-    correlations = {}
-
-    if category not in expense_monthly_totals.columns:
-        st.warning(f"No data found for the selected category: {category}")
-        return []
-
-    for commodity in commodity_df["Commodity"].unique():
-        # Resample and align commodity prices
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean().to_period("M")
-        
-        # Combine and align expense with commodity data
-        combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
-        combined = combined.reindex(expense_monthly_totals.index, fill_value=0)  # Reindex to fill missing months
-
-        # Calculate correlation
-        correlation = combined["Expense"].corr(combined["Commodity"])
-        correlations[(commodity, category)] = correlation
-
-    # Sort and return top correlations
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations[:3]
-
-
-
-
-# Forecast Returns & Volatility
-def forecast_returns_and_volatility(commodity_data, duration):
-    model_arima = ARIMA(commodity_data['Commodity_Price'], order=(1, 1, 1))
-    arima_fit = model_arima.fit()
-    arima_forecast = arima_fit.forecast(steps=duration)
-    expected_monthly_return = ((arima_forecast - commodity_data['Commodity_Price'].iloc[-1]) / commodity_data['Commodity_Price'].iloc[-1]) * 100
-
-    model_garch = arch_model(commodity_data['Daily_Return'].dropna(), vol='Garch', p=1, q=1)
-    garch_fit = model_garch.fit(disp="off")
-    garch_forecast = garch_fit.forecast(horizon=duration)
-    expected_volatility = np.sqrt(garch_forecast.variance.values[-1, :]) * 100
-
-    return expected_monthly_return, expected_volatility
-
-# Recommend contracts based on best correlations, ensuring positive savings
+# Recommend contracts based on best correlations, handling None values for correlation
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     for (commodity, category), correlation in best_correlations:
+        if correlation is None:
+            continue
+
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
         duration = 12  # Example duration; can be adjusted based on QuickBooks data analysis
