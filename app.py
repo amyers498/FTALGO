@@ -27,34 +27,41 @@ def load_commodity_data(file):
         st.stop()
 
 # Correlate multiple expenses with commodities
-def correlate_expenses_with_commodities(expense_df, commodity_df):
-    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
-    correlations = {}
+def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.5, correlation_step=0.1):
+    # Start with the initial minimum correlation threshold
+    current_correlation_threshold = min_correlation
+    found_hedges = []
 
-    for commodity in commodity_df["Commodity"].unique():
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
-        commodity_prices = commodity_prices.resample("M").mean()
-        for category in expense_monthly_totals.columns:
-            combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
-            correlation = combined["Expense"].corr(combined["Commodity"])
-            correlations[(commodity, category)] = correlation
+    while not found_hedges and current_correlation_threshold >= 0:
+        expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
+        correlations = {}
 
-    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-    return best_correlations[:3]
+        # Iterate over each commodity to calculate correlations
+        for commodity in commodity_df["Commodity"].unique():
+            commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
+            commodity_prices = commodity_prices.resample("M").mean()
+            
+            # Calculate correlation with each expense category
+            for category in expense_monthly_totals.columns:
+                combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
+                correlation = combined["Expense"].corr(combined["Commodity"])
 
-# Forecast Returns & Volatility
-def forecast_returns_and_volatility(commodity_data, duration):
-    model_arima = ARIMA(commodity_data['Commodity_Price'], order=(1, 1, 1))
-    arima_fit = model_arima.fit()
-    arima_forecast = arima_fit.forecast(steps=duration)
-    expected_monthly_return = ((arima_forecast - commodity_data['Commodity_Price'].iloc[-1]) / commodity_data['Commodity_Price'].iloc[-1]) * 100
+                # Store only those above the current threshold
+                if abs(correlation) >= current_correlation_threshold:
+                    correlations[(commodity, category)] = correlation
 
-    model_garch = arch_model(commodity_data['Daily_Return'].dropna(), vol='Garch', p=1, q=1)
-    garch_fit = model_garch.fit(disp="off")
-    garch_forecast = garch_fit.forecast(horizon=duration)
-    expected_volatility = np.sqrt(garch_forecast.variance.values[-1, :]) * 100
+        # Sort and keep the top results based on correlation strength
+        best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
 
-    return expected_monthly_return, expected_volatility
+        # Keep top 3 correlations if they exist
+        found_hedges = best_correlations[:3]
+
+        # If no viable options were found, decrease the correlation threshold
+        current_correlation_threshold -= correlation_step
+
+    # Return the best correlations found
+    return found_hedges
+
 
 # Recommend contracts based on best expense-commodity correlations
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
