@@ -80,6 +80,19 @@ def select_contract_durations(hedge_duration):
     }
     return contract_durations[hedge_duration]
 
+def recommend_hedge_duration(volatility, financial_profile, expense_df):
+    monthly_expenses = expense_df.groupby(expense_df['Date'].dt.month)["Amount"].sum()
+    high_season = monthly_expenses.idxmax() if monthly_expenses.max() > 1.5 * monthly_expenses.mean() else None
+    
+    if volatility > 25 or financial_profile["risk_tolerance"] == "High" or high_season:
+        hedge_duration = "Short-Term (1-3 months)"
+    elif 15 < volatility <= 25 or financial_profile["risk_tolerance"] == "Moderate":
+        hedge_duration = "Medium-Term (3-12 months)"
+    else:
+        hedge_duration = "Long-Term (12+ months)"
+    
+    return hedge_duration
+
 def recommend_contracts_and_select_best(commodity_df, selected_commodity, hedge_duration, financial_profile):
     commodity_data = commodity_df[commodity_df['Commodity'] == selected_commodity]
     selected_durations = select_contract_durations(hedge_duration)
@@ -162,8 +175,7 @@ if quickbooks_file and commodity_file:
     if best_contract:
         st.subheader("Best Contract Recommendation")
         st.write(best_contract)
-
-        # Plot historical and expected returns and volatility for visual analysis
+                # Plot historical and expected returns and volatility for visual analysis
         contract_durations = [c["Duration (months)"] for c in contracts]
         historical_returns = [c["Historical Average Return (%)"] for c in contracts]
         historical_volatility = [c["Historical Volatility (%)"] for c in contracts]
@@ -195,3 +207,5 @@ if quickbooks_file and commodity_file:
         st.write("No viable contracts were found based on the given data.")
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
+
+
