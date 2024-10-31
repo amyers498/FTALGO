@@ -26,11 +26,12 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate multiple expenses with commodities, ensuring at least one hedge is found
+# Correlate multiple expenses with commodities, and fallback to return-based selection if needed
 def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
 
+    # Calculate correlations
     for commodity in commodity_df["Commodity"].unique():
         commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
         commodity_prices = commodity_prices.resample("M").mean()
@@ -39,20 +40,16 @@ def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlatio
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
+    # Filter correlations by threshold and loosen if no results found
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
 
-    # Loosen correlation threshold until at least one or three recommendations are found
-    attempt = 0
-    while attempt < max_attempts:
-        filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
-        if len(filtered_correlations) >= 1:
-            return filtered_correlations[:3]  # Top 1 to 3 matches above min_correlation
-        min_correlation -= 0.05  # Loosen threshold incrementally
-        attempt += 1
+    # Fallback to return-based selection if no correlation matches
+    if not filtered_correlations:
+        st.write("No correlation match found; optimizing based solely on expected return.")
+        return [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]  # Ignore correlation, use top returns
 
-    # If no correlations match, return top results by expected return
-    st.write("No high correlation match found; displaying top results by return.")
-    return best_correlations[:3]
+    return filtered_correlations[:3]  # Return top correlated items if available
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -68,7 +65,7 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend contracts based on best expense-commodity correlations, ensuring only positive savings
+# Recommend contracts based on best expense-commodity correlations or highest return
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
@@ -80,9 +77,9 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
 
-        # Calculate potential savings over duration and filter for positive savings
+        # Calculate potential savings over duration
         estimated_savings = avg_monthly_expense * (monthly_returns.mean() / 100) * duration
-        if estimated_savings > 0:
+        if estimated_savings > 0:  # Only show positive savings
             recommendations.append({
                 "Commodity": commodity,
                 "Category": category,
@@ -93,24 +90,8 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
                 "Monthly Returns": monthly_returns.tolist()
             })
 
-    # Ensure at least one recommendation is returned by displaying best expected return
-    if not recommendations:
-        best_correlations_by_return = sorted(best_correlations, key=lambda x: x[1], reverse=True)
-        for (commodity, category), correlation in best_correlations_by_return[:3]:
-            commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
-            commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-            monthly_returns, _ = forecast_returns_and_volatility(commodity_data, duration)
-            recommendations.append({
-                "Commodity": commodity,
-                "Category": category,
-                "Correlation": 0,
-                "Expected Monthly Return (%)": monthly_returns.mean(),
-                "Expected Volatility (%)": 0,
-                "Potential Savings": max(0, round(estimated_savings, 2)),
-                "Monthly Returns": monthly_returns.tolist()
-            })
-
-    return recommendations[:3]  # Return top 3 recommendations
+    # If recommendations empty, note the lack of positive return hedges
+    return recommendations if recommendations else [{"Message": "No positive savings hedges found; review data or strategy."}]
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -163,7 +144,7 @@ if quickbooks_file and commodity_file:
         st.pyplot(fig)
 
     else:
-        # Auto-select the best correlations and recommend hedges
+        # Auto-select the best correlations or highest returns
         best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
         best_recommendations = recommend_best_hedges(commodity_df, expense_df, best_correlations)
 
@@ -205,3 +186,4 @@ if quickbooks_file and commodity_file:
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
+            
