@@ -26,33 +26,22 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate multiple expenses with commodities, ensuring at least one hedge is found
-def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
+# Correlate multiple expenses with all commodities
+def correlate_expenses_with_commodities(expense_df, commodity_df):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
 
+    # Test all combinations of expenses and commodities without retry limits
     for commodity in commodity_df["Commodity"].unique():
-        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
-        commodity_prices = commodity_prices.resample("M").mean()
+        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"].resample("M").mean()
         for category in expense_monthly_totals.columns:
             combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
+    # Sort all pairs by absolute correlation in descending order
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-
-    # Loosen correlation threshold until at least one or three recommendations are found
-    attempt = 0
-    while attempt < max_attempts:
-        filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
-        if len(filtered_correlations) >= 1:
-            return filtered_correlations[:3]  # Top 1 to 3 matches above min_correlation
-        min_correlation -= 0.05  # Loosen threshold incrementally
-        attempt += 1
-
-    # If no correlations match, return top results by expected return
-    st.write("No high correlation match found; displaying top results by return.")
-    return best_correlations[:3]
+    return best_correlations  # Return all sorted correlations for analysis
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -186,7 +175,7 @@ if quickbooks_file and commodity_file:
 
             # Plot Monthly Returns
             fig, ax = plt.subplots(figsize=(10, 6))
-            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
+            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns']), marker="o", ax=ax
             ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
             ax.set_xlabel("Month")
             ax.set_ylabel("Expected Return (%)")
