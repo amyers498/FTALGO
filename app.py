@@ -26,18 +26,6 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Determine hedge contract duration based on expense volatility
-def determine_contract_duration(expense_df, category):
-    monthly_expenses = expense_df[expense_df["Expense_Category"] == category].groupby(expense_df["Date"].dt.to_period("M"))["Amount"].sum()
-    volatility = monthly_expenses.std() / monthly_expenses.mean()
-    
-    if volatility > 0.2:
-        return 3  # Short-term for high volatility
-    elif 0.1 <= volatility <= 0.2:
-        return 6  # Medium-term for moderate volatility
-    else:
-        return 12  # Long-term for low volatility
-
 # Correlate all expenses with all commodities
 def correlate_expenses_with_commodities(expense_df, commodity_df):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
@@ -50,7 +38,8 @@ def correlate_expenses_with_commodities(expense_df, commodity_df):
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
-    return sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    return best_correlations  # Return sorted correlations for analysis
 
 # Correlate a specific expense category with all commodities
 def correlate_specific_category(expense_df, commodity_df, category):
@@ -67,7 +56,8 @@ def correlate_specific_category(expense_df, commodity_df, category):
         correlation = combined["Expense"].corr(combined["Commodity"])
         correlations[(commodity, category)] = correlation
 
-    return sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
+    return best_correlations[:3]  # Return top 3 correlations for the specific category
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -83,16 +73,14 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend contracts based on best correlations, using expense-based contract length
+# Recommend contracts based on best correlations, ensuring positive savings
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-
-        # Set contract duration based on volatility
-        duration = determine_contract_duration(expense_df, category)
+        duration = 12  # Example duration; can be adjusted based on QuickBooks data analysis
 
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
@@ -106,10 +94,12 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
                 "Expected Monthly Return (%)": monthly_returns.mean(),
                 "Expected Volatility (%)": volatility.mean(),
                 "Potential Savings": round(estimated_savings, 2),
-                "Duration (Months)": duration,
-                "Explanation": f"This hedge was selected for {category} due to a {round(correlation * 100, 1)}% correlation with {commodity}. A {duration}-month contract was suggested based on expense volatility."
+                "Monthly Returns": monthly_returns.tolist() if not monthly_returns.empty else None,
+                "Explanation": f"This hedge was selected for {category} due to a {round(correlation * 100, 1)}% correlation with {commodity}, offering stable returns and helping to control price fluctuations."
             })
 
+    if not recommendations:
+        st.write("No positive savings recommendations found.")
     return recommendations[:3]
 
 # Streamlit Setup
@@ -156,19 +146,21 @@ if quickbooks_file and commodity_file:
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
-            st.write(f"**Duration (Months):** {rec['Duration (Months)']}")
             st.write(f"**Explanation:** {rec['Explanation']}")
 
-            # Plot Monthly Returns
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
-            ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
-            ax.set_xlabel("Month")
-            ax.set_ylabel("Expected Return (%)")
-            st.pyplot(fig)
+            # Check for Monthly Returns data before plotting
+            if rec['Monthly Returns']:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
+                ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
+                ax.set_xlabel("Month")
+                ax.set_ylabel("Expected Return (%)")
+                st.pyplot(fig)
+            else:
+                st.write("No Monthly Returns data available for plotting.")
 
     else:
-        # Auto-select the best correlations
+        # Auto-select the best correlations and recommend hedges
         best_correlations = correlate_expenses_with_commodities(expense_df, commodity_df)
         best_recommendations = recommend_best_hedges(commodity_df, expense_df, best_correlations)
 
@@ -178,20 +170,22 @@ if quickbooks_file and commodity_file:
             st.write(f"### Recommendation {idx}")
             st.write(f"**Commodity:** {rec['Commodity']}")
             st.write(f"**Expense Category:** {rec['Category']}")
-            st.write(f"**Correlation with Expense:** {rec['Correlation']}")
+            s            st.write(f"**Correlation with Expense:** {rec['Correlation']}")
             st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
             st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
             st.write(f"**Potential Savings:** ${rec['Potential Savings']:.2f}")
-            st.write(f"**Duration (Months):** {rec['Duration (Months)']}")
             st.write(f"**Explanation:** {rec['Explanation']}")
 
-            # Plot Monthly Returns
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
-            ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
-            ax.set_xlabel("Month")
-            ax.set_ylabel("Expected Return (%)")
-            st.pyplot(fig)
+            # Check for Monthly Returns data before plotting
+            if rec['Monthly Returns']:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
+                ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
+                ax.set_xlabel("Month")
+                ax.set_ylabel("Expected Return (%)")
+                st.pyplot(fig)
+            else:
+                st.write("No Monthly Returns data available for plotting.")
 
             # Plot Potential Savings
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -203,7 +197,6 @@ if quickbooks_file and commodity_file:
 
         if not best_recommendations:
             st.write("No viable contracts were found. Please review the data or adjust criteria.")
-
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
