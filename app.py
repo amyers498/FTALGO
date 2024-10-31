@@ -39,16 +39,14 @@ def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlatio
             correlation = combined["Expense"].corr(combined["Commodity"])
             correlations[(commodity, category)] = correlation
 
-    # Sort and filter by correlation
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
     filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
 
-    # Fallback if no strong correlations
     if not filtered_correlations:
         st.write("No correlation match found; optimizing based solely on expected return.")
-        return [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]  # Fallback based on top returns
+        return [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]  # Fallback to top returns
 
-    return filtered_correlations[:3]  # Top correlated items
+    return filtered_correlations[:3]
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -64,23 +62,22 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend hedges based on best correlation or returns
+# Recommend hedges based on correlation or returns
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     # Verify structure of best_correlations
-    if not isinstance(best_correlations, list) or not best_correlations:
-        st.error("No valid correlations or return-based recommendations found.")
+    if not isinstance(best_correlations, list) or not all(isinstance(item, tuple) and len(item) == 2 for item in best_correlations):
+        st.error("Unexpected structure in correlation data.")
         return recommendations
 
     for correlation_data in best_correlations:
         try:
             (commodity, category), correlation = correlation_data
         except ValueError:
-            st.error("Unexpected structure in correlation data.")
+            st.error("Error: Correlation data does not match expected structure.")
             return recommendations
 
-        # Process commodity and category
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
         duration = 12
