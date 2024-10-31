@@ -26,7 +26,7 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate multiple expenses with commodities, ensuring at least one hedge is found
+# Correlate expenses with commodities, loosening correlation until finding top returns if no correlation match
 def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
     expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
     correlations = {}
@@ -41,18 +41,17 @@ def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlatio
 
     best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
 
-    # Loosen correlation threshold until at least one or three recommendations are found
     attempt = 0
     while attempt < max_attempts:
         filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
-        if len(filtered_correlations) >= 1:
-            return filtered_correlations[:3]  # Top 1 to 3 matches above min_correlation
-        min_correlation -= 0.05  # Loosen threshold incrementally
+        if filtered_correlations:
+            return filtered_correlations[:3]
+        min_correlation -= 0.05
         attempt += 1
 
-    # If no correlations match, return top results by expected return
-    st.write("No high correlation match found; displaying top results by return.")
-    return best_correlations[:3]
+    # No high correlation match; use top returns and set correlation to 0
+    best_correlations = [(commodity, category, 0) for (commodity, category), _ in best_correlations[:3]]
+    return best_correlations
 
 # Forecast Returns & Volatility
 def forecast_returns_and_volatility(commodity_data, duration):
@@ -72,7 +71,7 @@ def forecast_returns_and_volatility(commodity_data, duration):
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
-    for (commodity, category), correlation in best_correlations:
+    for commodity, category, correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
         duration = 12  # Example duration
@@ -85,15 +84,14 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
         recommendations.append({
             "Commodity": commodity,
             "Category": category,
-            "Correlation": round(correlation, 2),
+            "Correlation": correlation,
             "Expected Monthly Return (%)": monthly_returns.mean(),
             "Expected Volatility (%)": volatility.mean(),
             "Potential Savings": round(estimated_savings, 2),
             "Monthly Returns": monthly_returns.tolist()
         })
 
-    # Return at least one recommendation even if no correlations found
-    return recommendations if recommendations else [{"Message": "No high correlation match; using top returns."}]
+    return recommendations
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -156,10 +154,6 @@ if quickbooks_file and commodity_file:
 
         for idx, rec in enumerate(best_recommendations, start=1):
             st.write(f"### Recommendation {idx}")
-            if "Message" in rec:
-                st.write(rec["Message"])
-                break  # Exit if only a message is available
-
             st.write(f"**Commodity:** {rec['Commodity']}")
             st.write(f"**Expense Category:** {rec['Category']}")
             st.write(f"**Correlation with Expense:** {rec['Correlation']}")
@@ -182,9 +176,3 @@ if quickbooks_file and commodity_file:
             ax.set_xlabel("Expense Category")
             ax.set_ylabel("Savings ($)")
             st.pyplot(fig)
-
-        if not best_recommendations:
-            st.write("No viable contracts were found. Please review the data or adjust criteria.")
-else:
-    st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
-
