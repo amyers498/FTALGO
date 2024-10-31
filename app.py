@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from statsmodels.tsa.arima.model import ARIMA
-from arch import arch_model  # Ensure 'arch' is installed for GARCH model
+from arch import arch_model
 import seaborn as sns
 
 # Load QuickBooks Data
@@ -26,36 +26,32 @@ def load_commodity_data(file):
         st.error("Error loading Commodity data.")
         st.stop()
 
-# Correlate expenses with commodities and adjust threshold until a match is found
-def correlate_expenses_with_commodities(expense_df, commodity_df, min_threshold=0.9, max_attempts=5):
-    threshold = min_threshold
-    best_correlations = []
+# Correlate multiple expenses with commodities, ensuring at least one hedge is found
+def correlate_expenses_with_commodities(expense_df, commodity_df, min_correlation=0.2, max_attempts=5):
+    expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
+    correlations = {}
 
-    # Loop to progressively loosen correlation threshold
-    for attempt in range(max_attempts):
-        expense_monthly_totals = expense_df.groupby([expense_df['Date'].dt.to_period("M"), 'Expense_Category'])["Amount"].sum().unstack(fill_value=0)
-        correlations = {}
+    for commodity in commodity_df["Commodity"].unique():
+        commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
+        commodity_prices = commodity_prices.resample("M").mean()
+        for category in expense_monthly_totals.columns:
+            combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
+            correlation = combined["Expense"].corr(combined["Commodity"])
+            correlations[(commodity, category)] = correlation
 
-        for commodity in commodity_df["Commodity"].unique():
-            commodity_prices = commodity_df[commodity_df["Commodity"] == commodity].set_index("Date")["Commodity_Price"]
-            commodity_prices = commodity_prices.resample("M").mean()
+    best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
 
-            for category in expense_monthly_totals.columns:
-                combined = pd.DataFrame({"Expense": expense_monthly_totals[category], "Commodity": commodity_prices}).dropna()
-                correlation = combined["Expense"].corr(combined["Commodity"])
-                if abs(correlation) >= threshold:  # Check if correlation meets threshold
-                    correlations[(commodity, category)] = correlation
+    # Loosen correlation threshold until at least one or three recommendations are found
+    attempt = 0
+    while attempt < max_attempts:
+        filtered_correlations = [item for item in best_correlations if abs(item[1]) >= min_correlation]
+        if len(filtered_correlations) >= 1:
+            return filtered_correlations[:3]  # Top 1 to 3 matches above min_correlation
+        min_correlation -= 0.05  # Loosen threshold incrementally
+        attempt += 1
 
-        # Sort correlations and check for matches
-        best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)
-        if best_correlations:
-            break  # Stop loosening threshold if matches are found
-        else:
-            threshold -= 0.1  # Loosen threshold by 0.1 each attempt
-
-    if not best_correlations:
-        # If no matches, select top results based on highest returns
-        best_correlations = sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+    # If no correlations match, return top results by expected return
+    st.write("No high correlation match found; displaying top results by return.")
     return best_correlations[:3]
 
 # Forecast Returns & Volatility
@@ -72,14 +68,14 @@ def forecast_returns_and_volatility(commodity_data, duration):
 
     return expected_monthly_return, expected_volatility
 
-# Recommend hedges based on best correlations or highest returns if correlation is not met
+# Recommend contracts based on best expense-commodity correlations
 def recommend_best_hedges(commodity_df, expense_df, best_correlations):
     recommendations = []
 
     for (commodity, category), correlation in best_correlations:
         commodity_data = commodity_df[commodity_df['Commodity'] == commodity]
         commodity_data["Daily_Return"] = commodity_data["Commodity_Price"].pct_change()
-        duration = 12  # Set duration (e.g., 12 months)
+        duration = 12  # Example duration
 
         monthly_returns, volatility = forecast_returns_and_volatility(commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == category]["Amount"].mean()
@@ -96,7 +92,8 @@ def recommend_best_hedges(commodity_df, expense_df, best_correlations):
             "Monthly Returns": monthly_returns.tolist()
         })
 
-    return recommendations if recommendations else [{"Info": "No high correlation match found; top results by return displayed."}]
+    # Return at least one recommendation even if no correlations found
+    return recommendations if recommendations else [{"Message": "No high correlation match; using top returns."}]
 
 # Streamlit Setup
 st.title("Enhanced Hedging Strategy Dashboard")
@@ -121,7 +118,7 @@ if quickbooks_file and commodity_file:
         selected_commodity_data["Daily_Return"] = selected_commodity_data["Commodity_Price"].pct_change()
         
         # Forecast returns and volatility for manual selection
-        duration = 12  # Example duration for manual choice
+        duration = 12
         monthly_returns, volatility = forecast_returns_and_volatility(selected_commodity_data, duration)
         avg_monthly_expense = expense_df[expense_df["Expense_Category"] == manual_category]["Amount"].mean()
         estimated_savings = avg_monthly_expense * (monthly_returns.mean() / 100) * duration
@@ -154,41 +151,40 @@ if quickbooks_file and commodity_file:
         best_recommendations = recommend_best_hedges(commodity_df, expense_df, best_correlations)
 
         # Display top contract recommendations
-        if best_recommendations:
-            st.subheader("Top Hedge Recommendations")
-            sns.set_theme(style="whitegrid")
+        st.subheader("Top Hedge Recommendations")
+        sns.set_theme(style="whitegrid")
 
-            for idx, rec in enumerate(best_recommendations, start=1):
-                if "Info" in rec:
-                    st.write(rec["Info"])
-                    continue
-                st.write(f"### Recommendation {idx}")
-                st.write(f"**Commodity:** {rec['Commodity']}")
-                st.write(f"**Expense Category:** {rec['Category']}")
-                st.write(f"**Correlation with Expense:** {rec['Correlation']}")
-                st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
-                st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
-                st.write(f"**Estimated Savings over Duration:** ${rec['Potential Savings']:.2f}")
+        for idx, rec in enumerate(best_recommendations, start=1):
+            st.write(f"### Recommendation {idx}")
+            if "Message" in rec:
+                st.write(rec["Message"])
+                break  # Exit if only a message is available
 
-                # Plot Monthly Returns
-                fig, ax = plt.subplots(figsize=(10, 6))
-                sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
-                ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
-                ax.set_xlabel("Month")
-                ax.set_ylabel("Expected Return (%)")
-                st.pyplot(fig)
+            st.write(f"**Commodity:** {rec['Commodity']}")
+            st.write(f"**Expense Category:** {rec['Category']}")
+            st.write(f"**Correlation with Expense:** {rec['Correlation']}")
+            st.write(f"**Expected Monthly Return (%):** {rec['Expected Monthly Return (%)']:.2f}")
+            st.write(f"**Expected Volatility (%):** {rec['Expected Volatility (%)']:.2f}")
+            st.write(f"**Estimated Savings over Duration:** ${rec['Potential Savings']:.2f}")
 
-                # Plot Potential Savings
-                fig, ax = plt.subplots(figsize=(10, 6))
-                sns.barplot(x=[rec['Category']], y=[rec['Potential Savings']], ax=ax, color="green")
-                ax.set_title(f"Estimated Total Savings for {rec['Category']} Expense")
-                ax.set_xlabel("Expense Category")
-                ax.set_ylabel("Savings ($)")
-                st.pyplot(fig)
+            # Plot Monthly Returns
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.lineplot(x=range(1, len(rec['Monthly Returns']) + 1), y=rec['Monthly Returns'], marker="o", ax=ax)
+            ax.set_title(f"Monthly Expected Returns for {rec['Commodity']} in {rec['Category']}")
+            ax.set_xlabel("Month")
+            ax.set_ylabel("Expected Return (%)")
+            st.pyplot(fig)
 
-        else:
-            st.write("No viable contracts were found, even after loosening correlation thresholds and considering high-return options. Please consider reviewing the input data or adjusting criteria further.")
+            # Plot Potential Savings
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.barplot(x=[rec['Category']], y=[rec['Potential Savings']], ax=ax, color="green")
+            ax.set_title(f"Estimated Total Savings for {rec['Category']} Expense")
+            ax.set_xlabel("Expense Category")
+            ax.set_ylabel("Savings ($)")
+            st.pyplot(fig)
 
+        if not best_recommendations:
+            st.write("No viable contracts were found. Please review the data or adjust criteria.")
 else:
     st.info("Please upload both QuickBooks data and commodity options data files to proceed.")
 
